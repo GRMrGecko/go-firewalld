@@ -109,22 +109,29 @@ func TestConfigClient_ListZones(t *testing.T) {
 func TestConfigClient_GetZoneByName(t *testing.T) {
 	response := "/org/fedoraproject/FirewallD1/config/zone/0"
 
-	configPathCaller, _, c := configClientSetup()
+	configPathCaller, conn, c := configClientSetup()
 	configPathCaller.
-		On("Call", mock.Anything, mock.Anything).
+		On("Call", mock.Anything, mock.MatchedBy(func(o interface{}) bool {
+			c := o.(call)
+			return c.Method == firewalldConfig+"getZoneByName"
+		})).
 		Run(func(args mock.Arguments) {
 			c := args.Get(1).(call)
 			s := c.Returns[0].(*string)
 			*s = response
 		}).
 		Return(nil)
+	zoneObjectCaller := &callerMock{}
+	conn.
+		On("Object", dbusDest, response).
+		Return(zoneObjectCaller)
 
 	ctx := context.Background()
 
-	zonePath, err := c.GetZoneByName(ctx, "test")
+	zone, err := c.GetZoneByName(ctx, "test")
 	require.NoError(t, err)
 
-	assert.Equal(t, response, zonePath)
+	assert.Equal(t, response, zone.Path)
 }
 
 func TestConfigClient_GetServiceByName(t *testing.T) {
@@ -155,7 +162,7 @@ func TestConfigClient_RemoveZone(t *testing.T) {
 	configPathCaller.
 		On("Call", mock.Anything, mock.MatchedBy(func(o interface{}) bool {
 			c := o.(call)
-			return c.Method == configGetZoneByNameMethod
+			return c.Method == firewalldConfig+"getZoneByName"
 		})).
 		Run(func(args mock.Arguments) {
 			c := args.Get(1).(call)
@@ -174,7 +181,10 @@ func TestConfigClient_RemoveZone(t *testing.T) {
 
 	ctx := context.Background()
 
-	err := c.RemoveZone(ctx, "ssh")
+	zone, err := c.GetZoneByName(ctx, "ssh")
+	require.NoError(t, err)
+
+	err = zone.Remove(ctx)
 	require.NoError(t, err)
 }
 
@@ -249,7 +259,7 @@ func TestClient_GetZoneSettings(t *testing.T) {
 	configPathCaller.
 		On("Call", mock.Anything, mock.MatchedBy(func(o interface{}) bool {
 			c := o.(call)
-			return c.Method == configGetZoneByNameMethod
+			return c.Method == firewalldConfig+"getZoneByName"
 		})).
 		Run(func(args mock.Arguments) {
 			c := args.Get(1).(call)
@@ -273,7 +283,10 @@ func TestClient_GetZoneSettings(t *testing.T) {
 
 	ctx := context.Background()
 
-	settings, err := c.GetZoneSettings(ctx, "ssh")
+	zone, err := c.GetZoneByName(ctx, "ssh")
+	require.NoError(t, err)
+
+	settings, err := zone.GetSettings(ctx)
 	require.NoError(t, err)
 
 	assert.Equal(t, expected, settings)

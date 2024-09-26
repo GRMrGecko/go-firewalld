@@ -35,7 +35,7 @@ func main() {
 	exitOnErr(err)
 	fmt.Println("Initial Zones:", zones)
 
-	err = client.Config().AddZone(ctx, "test", firewalld.ZoneSettings{
+	err = client.Config().AddZone2(ctx, "test", firewalld.ZoneSettings{
 		Target: "default",
 	})
 	exitOnErr(err)
@@ -45,7 +45,10 @@ func main() {
 	exitOnErr(err)
 	fmt.Println("Updated Zones:", zones)
 
-	err = client.Config().RemoveZone(ctx, "test")
+	zone, err := client.Config().GetZoneByName(ctx, "test")
+	exitOnErr(err)
+
+	err = zone.Remove(ctx)
 	exitOnErr(err)
 	fmt.Println("Removed zone 'test'")
 }

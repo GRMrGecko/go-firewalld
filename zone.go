@@ -16,173 +16,231 @@ limitations under the License.
 
 package firewalld
 
-type ZoneSettings struct {
-	Version         string
-	Name            string
-	Description     string
-	Target          string
-	Services        []string
-	Ports           []Port
-	ICMPBlocks      []string
-	Masquerade      bool
-	ForwardPorts    []ForwardPort
-	Interfaces      []string
-	SourceAddresses []string
-	RichRules       []string
-	Protocols       []string
-	SourcePorts     []Port
+import (
+	"context"
+
+	"github.com/godbus/dbus/v5"
+)
+
+type Zone struct {
+	Path       string
+	configPath caller
 }
 
-func ZoneSettingsFromSlice(s []interface{}) ZoneSettings {
-	return ZoneSettings{
-		Version:     s[0].(string),
-		Name:        s[1].(string),
-		Description: s[2].(string),
-		// UNUSED s[3].(bool)
-		Target:          s[4].(string),
-		Services:        s[5].([]string),
-		Ports:           interfaceSliceToPorts(s[6]),
-		ICMPBlocks:      toStringSlice(s[7]),
-		Masquerade:      s[8].(bool),
-		ForwardPorts:    interfaceSliceToForwardPorts(s[9]),
-		Interfaces:      s[10].([]string),
-		SourceAddresses: s[11].([]string),
-		RichRules:       s[12].([]string),
-		Protocols:       s[13].([]string),
-		SourcePorts:     interfaceSliceToPorts(s[14]),
-	}
+// Zone configuration prefix.
+const configZone = "org.fedoraproject.FirewallD1.config.zone."
+
+func (z *Zone) callWithReturn(ctx context.Context, method string, returnArg interface{}, args ...interface{}) error {
+	call := newCall(configZone+method, 0).WithArguments(args...).WithReturns(returnArg)
+	return z.configPath.Call(ctx, call)
 }
 
-func (z *ZoneSettings) ToSlice() []interface{} {
-	return []interface{}{
-		z.Version,
-		z.Name,
-		z.Description,
-		false, // UNUSED
-		z.Target,
-		z.Services,
-		portsToInterfaceSlice(z.Ports),
-		z.ICMPBlocks,
-		z.Masquerade,
-		forwardPortsToInterfaceSlice(z.ForwardPorts),
-		z.Interfaces,
-		z.SourceAddresses,
-		z.RichRules,
-		z.Protocols,
-		portsToInterfaceSlice(z.SourcePorts),
-		false, // needed but ???
-	}
+func (z *Zone) call(ctx context.Context, method string, args ...interface{}) error {
+	call := newCall(configZone+method, 0).WithArguments(args...)
+	return z.configPath.Call(ctx, call)
 }
 
-type Port struct {
-	Port     string
-	Protocol string
+// DEPRECATED: Return permanent settings of given zone.
+func (z *Zone) GetSettings(
+	ctx context.Context) (ZoneSettings, error) {
+	var zoneSettings []interface{}
+	err := z.callWithReturn(ctx, "getSettings", &zoneSettings)
+	if err != nil {
+		return ZoneSettings{}, err
+	}
+
+	return ZoneSettingsFromSlice(zoneSettings), nil
 }
 
-func PortFromSlice(s []string) Port {
-	return Port{
-		Port:     s[0],
-		Protocol: s[1],
+// Return permanent settings of given zone.
+func (z *Zone) GetSettings2(
+	ctx context.Context) (ZoneSettings, error) {
+	var zoneSettings map[string]dbus.Variant
+	err := z.callWithReturn(ctx, "getSettings2", &zoneSettings)
+	if err != nil {
+		return ZoneSettings{}, err
 	}
+
+	return ZoneSettingsFromMap2(zoneSettings), nil
 }
 
-func (p *Port) ToSlice() []interface{} {
-	return []interface{}{
-		p.Port,
-		p.Protocol,
-	}
+// Add zone with given settings into permanent configuration.
+// Needs https://github.com/godbus/dbus/pull/329 before this can fully function.
+func (z *Zone) Update(
+	ctx context.Context, settings ZoneSettings) error {
+	return z.call(ctx, "update", settings.ToSlice())
 }
 
-type ForwardPort struct {
-	Port      string
-	Protocol  string
-	ToPort    string
-	ToAddress string
+// Add zone with given settings into permanent configuration.
+// Needs https://github.com/godbus/dbus/pull/329 before this can fully function.
+func (z *Zone) Update2(
+	ctx context.Context, settings ZoneSettings) error {
+	return z.call(ctx, "update2", settings.ToMap2())
 }
 
-func ForwardPortFromSlice(s []string) ForwardPort {
-	return ForwardPort{
-		Port:      s[0],
-		Protocol:  s[1],
-		ToPort:    s[2],
-		ToAddress: s[3],
-	}
+// Remove zone from permanent configuration.
+func (z *Zone) Remove(
+	ctx context.Context) error {
+	return z.call(ctx, "remove")
 }
 
-func (p *ForwardPort) ToSlice() []interface{} {
-	return []interface{}{
-		p.Port,
-		p.Protocol,
-		p.ToPort,
-		p.ToAddress,
-	}
+// Add port forward to zone permanent configuration.
+func (z *Zone) AddPortForward(
+	ctx context.Context, port, protocol, toport, toaddr string) error {
+	return z.call(ctx, "addForwardPort", port, protocol, toport, toaddr)
 }
 
-func interfaceSliceToPorts(s interface{}) []Port {
-	var out []Port
-	for _, p := range toStringSliceSlice(s) {
-		out = append(out, PortFromSlice(p))
-	}
-	return out
+// Add ICMP block to zone permanent configuration.
+func (z *Zone) AddIcmpBlock(
+	ctx context.Context, icmptype string) error {
+	return z.call(ctx, "addIcmpBlock", icmptype)
 }
 
-func portsToInterfaceSlice(ports []Port) [][]interface{} {
-	var out [][]interface{}
-	for _, p := range ports {
-		out = append(out, p.ToSlice())
-	}
-	return out
+// Enable ICMP block inversion on zone permanent configuration.
+func (z *Zone) AddIcmpBlockInversion(
+	ctx context.Context) error {
+	return z.call(ctx, "addIcmpBlockInversion")
 }
 
-func interfaceSliceToForwardPorts(s interface{}) []ForwardPort {
-	var out []ForwardPort
-	for _, p := range toStringSliceSlice(s) {
-		out = append(out, ForwardPort{
-			Port:      p[0],
-			Protocol:  p[1],
-			ToPort:    p[2],
-			ToAddress: p[3],
-		})
-	}
-	return out
+// Add interface to zone permanent configuration.
+func (z *Zone) AddInterface(
+	ctx context.Context, ifname string) error {
+	return z.call(ctx, "addInterface", ifname)
 }
 
-func forwardPortsToInterfaceSlice(ports []ForwardPort) [][]interface{} {
-	var out [][]interface{}
-	for _, p := range ports {
-		out = append(out, p.ToSlice())
-	}
-	return out
+// Enable masquerade on zone permanent configuration.
+func (z *Zone) AddMasquerade(
+	ctx context.Context) error {
+	return z.call(ctx, "addMasquerade")
 }
 
-func toStringSliceSlice(in interface{}) (out [][]string) {
-	topSlice, ok := in.([][]interface{})
-	if !ok {
-		return nil
-	}
-
-	for _, slice := range topSlice {
-		s := toStringSlice(slice)
-		if len(s) == 0 {
-			continue
-		}
-		out = append(out, s)
-	}
-	return
+// Add port to zone permanent configuration.
+func (z *Zone) AddPort(
+	ctx context.Context, port, protocol string) error {
+	return z.call(ctx, "addPort", port, protocol)
 }
 
-func toStringSlice(in interface{}) (out []string) {
-	slice, ok := in.([]interface{})
-	if !ok {
-		return nil
-	}
+// Add protocol to zone permanent configuration.
+func (z *Zone) AddProtocol(
+	ctx context.Context, protocol string) error {
+	return z.call(ctx, "addProtocol", protocol)
+}
 
-	for _, i := range slice {
-		s, ok := i.(string)
-		if !ok {
-			continue
-		}
-		out = append(out, s)
-	}
-	return
+// Add rich rule to zone permanent configuration.
+func (z *Zone) AddRichRule(
+	ctx context.Context, rule string) error {
+	return z.call(ctx, "addRichRule", rule)
+}
+
+// Add service to zone permanent configuration.
+func (z *Zone) AddService(
+	ctx context.Context, service string) error {
+	return z.call(ctx, "addService", service)
+}
+
+// Add source to zone permanent configuration.
+func (z *Zone) AddSource(
+	ctx context.Context, source string) error {
+	return z.call(ctx, "addSource", source)
+}
+
+// Add source oirt to zone permanent configuration.
+func (z *Zone) AddSourcePort(
+	ctx context.Context, port, protocol string) error {
+	return z.call(ctx, "addSourcePort", port, protocol)
+}
+
+func (z *Zone) RemovePortForward(
+	ctx context.Context, port, protocol, toport, toaddr string) error {
+	return z.call(ctx, "removeForwardPort", port, protocol, toport, toaddr)
+}
+
+// Remove ICMP block to zone permanent configuration.
+func (z *Zone) RemoveIcmpBlock(
+	ctx context.Context, icmptype string) error {
+	return z.call(ctx, "removeIcmpBlock", icmptype)
+}
+
+// Disable ICMP block inversion on zone permanent configuration.
+func (z *Zone) RemoveIcmpBlockInversion(
+	ctx context.Context) error {
+	return z.call(ctx, "removeIcmpBlockInversion")
+}
+
+// Remove interface to zone permanent configuration.
+func (z *Zone) RemoveInterface(
+	ctx context.Context, ifname string) error {
+	return z.call(ctx, "removeInterface", ifname)
+}
+
+// Disable masquerade on zone permanent configuration.
+func (z *Zone) RemoveMasquerade(
+	ctx context.Context) error {
+	return z.call(ctx, "removeMasquerade")
+}
+
+// Remove port to zone permanent configuration.
+func (z *Zone) RemovePort(
+	ctx context.Context, port, protocol string) error {
+	return z.call(ctx, "removePort", port, protocol)
+}
+
+// Remove protocol to zone permanent configuration.
+func (z *Zone) removeProtocol(
+	ctx context.Context, protocol string) error {
+	return z.call(ctx, "removeProtocol", protocol)
+}
+
+// Remove rich rule to zone permanent configuration.
+func (z *Zone) RemoveRichRule(
+	ctx context.Context, rule string) error {
+	return z.call(ctx, "removeRichRule", rule)
+}
+
+// Remove service to zone permanent configuration.
+func (z *Zone) RemoveService(
+	ctx context.Context, service string) error {
+	return z.call(ctx, "removeService", service)
+}
+
+// Remove source to zone permanent configuration.
+func (z *Zone) RemoveSource(
+	ctx context.Context, source string) error {
+	return z.call(ctx, "removeSource", source)
+}
+
+// Remove source oirt to zone permanent configuration.
+func (z *Zone) RemoveSourcePort(
+	ctx context.Context, port, protocol string) error {
+	return z.call(ctx, "removeSourcePort", port, protocol)
+}
+
+// Rename the zone.
+func (z *Zone) Rename(
+	ctx context.Context, name string) error {
+	return z.call(ctx, "rename", name)
+}
+
+// Set description for the zone permanent configuration.
+func (z *Zone) SetDescription(
+	ctx context.Context, description string) error {
+	return z.call(ctx, "setDescription", description)
+}
+
+// Set name for the zone permanent configuration.
+func (z *Zone) SetName(
+	ctx context.Context, short string) error {
+	return z.call(ctx, "setShort", short)
+}
+
+// Set target for the zone permanent configuration.
+func (z *Zone) SetTarget(
+	ctx context.Context, target string) error {
+	return z.call(ctx, "setTarget", target)
+}
+
+// Set target for the zone permanent configuration.
+func (z *Zone) SetVersion(
+	ctx context.Context, version string) error {
+	return z.call(ctx, "setVersion", version)
 }
